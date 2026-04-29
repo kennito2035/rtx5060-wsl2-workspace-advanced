@@ -1,12 +1,12 @@
 services:
-  tf-lab:
+  ml-workspace:
     build:
       context: ..
       dockerfile: dockerfiles/Dockerfile
     image: rtx-5060
     container_name: rtx-5060_dev
 
-    # Refined GPU access for Blackwell
+    # GPU access — Blackwell (sm_120) requires driver 570+
     deploy:
       resources:
         reservations:
@@ -18,39 +18,49 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-      - CUDA_MODULE_LOADING=LAZY    # Optimized kernel loading for Blackwell ISA
-      - NVIDIA_DISABLE_REQUIRE=1    # Skips minor version checks for 12.8 -> 13.1 compatibility
-      - PYTORCH_ALLOC_CONF=expandable_segments:True    # Reduces VRAM fragmentation on 8 GB VRAM
-      - LLAMA_ARG_N_BATCH=512   # Prevents llama-cpp from trying to allocate massive batches on 8 GB VRAM
 
-    ipc: host
+      # --- Blackwell / CUDA ---
+      - CUDA_MODULE_LOADING=LAZY        # Defers kernel loading; reduces cold-start
+                                        # latency on Blackwell's new ISA
+      - NVIDIA_DISABLE_REQUIRE=1        # Skips minor-version checks between
+                                        # pip packages and CUDA 13.2 system libs
+
+      # --- PyTorch VRAM (8 GB RTX 5060) ---
+      - PYTORCH_ALLOC_CONF=expandable_segments:True     # Reduces fragmentation;
+                                                        # critical on 8 GB cards
+
+      # --- llama-cpp-python ---
+      - LLAMA_ARG_BATCH=512             # Caps batch allocation; prevents OOM on
+                                        # 8 GB VRAM during LLM prompt evaluation
+
+    ipc: host           # Required for multi-process data loaders
     ulimits:
-      memlock: -1
-      stack: 67108864
-      
+      memlock: -1       # Unlimited locked memory; needed for GPU DMA
+      stack: 67108864   # 64 MB stack; required by NCCL and cuDNN internals
+
     ports:
-      - "8888:8888" # Jupyter Lab
-      - "5173:5173" # For Vite frontend stuff
-      - "8000:8000" # For backend stuff
+      - "8888:8888"     # Jupyter Lab
+      - "5173:5173"     # Vite dev server
+      - "8000:8000"     # FastAPI / Uvicorn
 
     volumes:
-      - ..:/workspace
-      - jupyter-settings:/root/.jupyter
+      - ..:/workspace                       # Mount repo root into container
+      - jupyter-settings:/root/.jupyter     # Persist Jupyter config between rebuilds
 
     working_dir: /workspace
     stdin_open: true
     tty: true
-      
-    # Verify GPU, then launch Jupyter
+
+    # Verify GPU stack (PyTorch + llama-cpp), then launch Jupyter
     command: >
-      bash -c "python3 /usr/local/bin/verify_gpu.py && 
-      echo '' && 
-      jupyter lab 
-      --ip 0.0.0.0 
-      --allow-root 
-      --no-browser 
-      --log-level=INFO 
-      --ServerApp.token='rtx-5060_dev' 
+      bash -c "python3 /usr/local/bin/verify_gpu.py &&
+      echo '' &&
+      jupyter lab
+      --ip 0.0.0.0
+      --allow-root
+      --no-browser
+      --log-level=INFO
+      --ServerApp.token='rtx-5060_dev'
       --ResourceUseDisplay.track_cpu_percent=True"
 
 volumes:

@@ -1,7 +1,21 @@
 ############################################
-# 1.) Base: NVIDIA TensorFlow 25.02 (CUDA 12.8, Python 3.12)
+# 1.) Base: NVIDIA PyTorch 26.03 (CUDA 13.2, sm_120 native)
+#
+# Switched from nvcr.io/nvidia/tensorflow:25.02-tf2-py3.
+# Reason: unstable / incomplete RTX 50-series (sm_120)
+# support observed in current TensorFlow releases.
+#
+# NVIDIA PyTorch 26.03 includes newer CUDA and
+# PyTorch builds with significantly better support
+# for RTX 5060 / Blackwell GPUs compared to the
+# current TensorFlow container ecosystem.
+#
+# NOTE:
+# CUDA 13.2 and Blackwell support are still relatively
+# new across the ML ecosystem, so some third-party
+# libraries may still exhibit compatibility issues.
 ############################################
-FROM nvcr.io/nvidia/tensorflow:25.02-tf2-py3
+FROM nvcr.io/nvidia/pytorch:26.03-py3
 
 ############################################
 # 2.) Working directory
@@ -10,7 +24,7 @@ WORKDIR /workspace
 
 ############################################
 # 3.) System-level dependencies
-############################################	
+############################################
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential cmake git curl python3-dev python3-pip \
@@ -51,48 +65,84 @@ COPY dockerfiles/rtx-5060_dev-requirements.txt .
 
 ############################################
 # 9.) Build python dependencies for sm_120
+#
+# NGC PyTorch 25.03+ ships /etc/pip/constraint.txt which is applied
+# globally by pip. numpy, ml-dtypes, and packaging entries are stripped
+# from it first so our explicit pins below are not silently overridden.
+#
+# Exclusion list: llama-cpp-python (built from source below),
+# numpy and ml-dtypes (force-pinned at the end to prevent 2.x
+# from sneaking in via transitive deps).
+#
+# packaging is pinned to <=25.0 to satisfy nvidia-dali-cuda130 2.0.0,
+# which declares an incompatibility with packaging 26+.
+#
+# ml-dtypes is relaxed from ==0.4.1 to >=0.5.0,<0.6.0 so that
+# onnx-ir 0.2.0 (which requires ml_dtypes>=0.5.0) is satisfied while
+# still blocking 0.6+ which begins requiring numpy 2.x.
+#
+# llama-cpp-python is built with --no-build-isolation so it reuses
+# the already-installed numpy instead of downloading it a second time,
+# preventing the repeated uninstall/reinstall churn seen in prior builds.
+#
+# pip is upgraded first alone. setuptools and wheel use --ignore-installed
+# because the NGC base installs them via Debian (no RECORD file), which
+# causes pip's uninstall step to fail and abort the entire RUN layer.
 ############################################
-RUN python3 -m pip install --upgrade pip setuptools wheel && \
-    # Create a constraints file to lock the entire NVIDIA compatibility layer
-    echo "numpy==1.26.4" > /tmp/constraints.txt && \
-    echo "ml-dtypes==0.4.1" >> /tmp/constraints.txt && \
+RUN python3 -m pip install --upgrade pip && \
+    pip install --upgrade setuptools wheel --ignore-installed && \
+    sed -i '/^numpy/d; /^ml-dtypes/d; /^packaging/d' /etc/pip/constraint.txt && \
+    echo "numpy==1.26.4"            > /tmp/constraints.txt && \
+    echo "ml-dtypes>=0.5.0,<0.6.0" >> /tmp/constraints.txt && \
+    echo "packaging<=25.0"          >> /tmp/constraints.txt && \
     \
-    # I. Install main requirements using the constraints and filtering
-    grep -vE "llama-cpp-python|tensorflow|numpy|ml-dtypes" rtx-5060_dev-requirements.txt > /tmp/reqs.txt || true && \
+    # I. Install main requirements (excluding source-built packages)
+    grep -vE "llama-cpp-python|numpy|ml-dtypes" rtx-5060_dev-requirements.txt > /tmp/reqs.txt || true && \
     python3 -m pip install --no-cache-dir -c /tmp/constraints.txt -r /tmp/reqs.txt && \
     \
-    # II. Build llama-cpp-python
-    # Using the constraint here prevents the build-wheels process from pulling NumPy 2.x
+    # II. Build llama-cpp-python from source for sm_120.
+    #     --no-build-isolation reuses the already-installed numpy rather than
+    #     downloading a fresh copy into an isolated build env, preventing churn.
+    #     scikit-build-core must be pre-installed before using --no-build-isolation;
+    #     otherwise pip cannot import the build backend declared in
+    #     llama-cpp-python's pyproject.toml and aborts with BackendUnavailable.
+    python3 -m pip install --no-cache-dir scikit-build-core && \
     export CMAKE_ARGS="-DGGML_CUDA=on \
                        -DGGML_CUDA_FORCE_CUBLAS=${FORCE_CUBLAS} \
                        -DCMAKE_CUDA_ARCHITECTURES=120 \
                        -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc" && \
     export FORCE_CMAKE=1 && \
-    python3 -m pip install llama-cpp-python --no-cache-dir -c /tmp/constraints.txt --force-reinstall && \
+    python3 -m pip install llama-cpp-python --no-cache-dir -c /tmp/constraints.txt \
+        --force-reinstall --no-build-isolation && \
     \
-    # III. Force-reinstall both to ensure they own the /usr/local/ path
-    python3 -m pip install --no-cache-dir "numpy==1.26.4" "ml-dtypes==0.4.1" --force-reinstall
+    # III. Force-pin final versions so no transitive dep overwrites them
+    python3 -m pip install --no-cache-dir \
+        "numpy==1.26.4" \
+        "ml-dtypes>=0.5.0,<0.6.0" \
+        "packaging<=25.0" \
+        --force-reinstall
 
 ############################################
 # 10.) Runtime optimization
 ############################################
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 ENV CUDA_MODULE_LOADING=LAZY
-ENV TF_ENABLE_ONEDNN_OPTS=0
 
 ############################################
-# 11.) Verification (smoke test) - C-level check
+# 11.) Verification (smoke test) — checks PyTorch GPU + llama-cpp GPU
 ############################################
 RUN echo "import torch; \
 import llama_cpp.llama_cpp as llm; \
+\
 cap = torch.cuda.get_device_capability(0); \
 print(f'Detected: {torch.cuda.get_device_name(0)} | sm_{cap[0]}{cap[1]}'); \
 assert cap[0] >= 12, 'Blackwell GPU not found'; \
+\
 print('Testing llama-cpp GPU backend...'); \
-# This reaches into the compiled GGML binary to check support \
 has_gpu = llm.llama_supports_gpu_offload(); \
 print(f'llama-cpp GPU Support: {has_gpu}'); \
 assert has_gpu, 'llama-cpp was built without CUDA support!'; \
+\
 print('Hardware verification passed!')" > /usr/local/bin/verify_gpu.py
 
 ############################################

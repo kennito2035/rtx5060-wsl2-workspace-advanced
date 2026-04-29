@@ -1,20 +1,36 @@
 ###############################################################################
+# rtx-5060_dev-requirements.txt
+# Updated: April 2026
+#
+# BASE IMAGE: nvcr.io/nvidia/pytorch:26.03-py3
+#
+# NOTE:
+# PyTorch stack is intentionally EXCLUDED from this file.
+# torch, torchvision, and torchaudio come pre-installed as NVIDIA-
+# optimized builds in the NGC PyTorch base image. Reinstalling them
+# from the standard PyPI index would silently replace those builds
+# with generic wheels and lose Blackwell-specific optimisations.
+#
+# llama-cpp-python is also excluded — it is compiled from source
+# directly in the Dockerfile with sm_120 / CUBLAS flags.
+###############################################################################
+
+###############################################################################
 # CORE AI & DATA SCIENCE
 ###############################################################################
 pandas
 scikit-learn
 matplotlib
 seaborn
-faiss-cpu              # Vector search
+faiss-cpu                  # Vector search (CPU build)
 
 ###############################################################################
-# DEEP LEARNING & LLMS
+# DEEP LEARNING & LLMs
+# torch / torchvision / torchaudio -> PRE-INSTALLED in NGC base, do not add.
 ###############################################################################
-torch
-torchvision
-torchaudio
-accelerate             # Hugging Face distributed training/inference
-sentence-transformers  # For embeddings
+accelerate                 # Hugging Face distributed training/inference
+sentence-transformers      # Embeddings (uses pre-installed torch)
+transformers               # Explicit pin ensures consistent HF ecosystem
 
 ###############################################################################
 # COMPUTER VISION & DOCUMENT PROCESSING
@@ -31,19 +47,20 @@ beautifulsoup4
 # BACKEND & API STACK
 ###############################################################################
 fastapi
-uvicorn
+uvicorn[standard]          # [standard] pulls in uvloop + httptools; covers the
+                           # separate httptools entry from v1.0.0
 pydantic-settings
 python-multipart
 websockets
 watchfiles
-python-dotenv          # Main package for .env support
+python-dotenv
 
 ###############################################################################
 # UTILITIES & SYSTEM
 ###############################################################################
-cmake
-pydot                  # For model visualization (requires graphviz)
+cmake                      # Required for llama-cpp-python source build
+pydot                      # Model visualisation (requires graphviz system pkg)
 markdown
-hf-xet                 # Fast transfer for large files from Hugging Face
-httptools              # Fast HTTP parser for uvicorn
-tomli                  # TOML parser for Python < 3.11 (kept for safety)
+hf-xet                     # Fast large-file transfer from Hugging Face Hub
+# tomli removed — Python 3.12 ships tomllib in the standard library
+# httptools removed — covered by uvicorn[standard]
