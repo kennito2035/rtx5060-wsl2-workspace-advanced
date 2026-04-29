@@ -2,9 +2,9 @@
 
 This repository contains a production-ready Docker environment for **end-to-end machine learning development** on **NVIDIA RTX 5000 series GPUs** in Windows 11. Build complete ML applications from training to deployment with GPU acceleration.
 
-**Python version:** 3.12.3  
-**Base image:** `nvcr.io/nvidia/tensorflow:25.02-tf2-py3`  
-**CUDA version:** 12.8+
+**Python version:** 3.12  
+**Base image:** `nvcr.io/nvidia/pytorch:26.03-py3`  
+**CUDA version:** 13.2
 
 ---
 
@@ -25,14 +25,15 @@ This workspace was developed and tested on:
 
 This containerized workspace includes everything you need for full-stack ML development:
 
-- **TensorFlow 2.x** with CUDA 12.8 GPU acceleration
-- **PyTorch** with full CUDA support
+- **PyTorch** with native Blackwell (sm_120) GPU acceleration — pre-installed as an NVIDIA-optimized build in the NGC base image
 - **llama-cpp-python** compiled from source for Blackwell (sm_120)
 - **Jupyter Lab** for interactive ML development
 - **Node.js LTS + npm** for modern frontend development
 - **FastAPI + Uvicorn** for ML model serving
 - **Vite** for rapid frontend prototyping
 - Optimized VRAM management for 8 GB GPUs
+
+> **Note:** The base image was switched from the NVIDIA TensorFlow container (`25.02-tf2-py3`) to the NVIDIA PyTorch container (`26.03-py3`) in v2.0.0 due to unstable RTX 50-series (sm_120) support in the TensorFlow NGC ecosystem. TensorFlow is no longer included by default.
 
 ---
 
@@ -49,9 +50,10 @@ Build complete ML applications in one environment:
 - Custom-compiled `llama-cpp-python` targeting sm_120
 - CUBLAS support for early Blackwell compatibility
 - Optimized CUDA kernel loading
+- CUDA 13.2 with native sm_120 support via the NGC PyTorch 26.03 base
 
 ### Professional Python ML Stack
-- TensorFlow 2.x + PyTorch
+- PyTorch (NVIDIA-optimized, pre-installed)
 - Pandas, scikit-learn, matplotlib, seaborn
 - Computer vision: OpenCV
 - Document processing: PDF, DOCX, Excel
@@ -76,7 +78,7 @@ Build complete ML applications in one environment:
 1. **NVIDIA Driver** (version 570+ for Blackwell)
 2. **WSL2** with **Ubuntu 24.04**
 3. **Docker Desktop** (latest, with WSL2 backend)
-4. **CUDA Toolkit 12.8+** in WSL2
+4. **CUDA Toolkit 13.2** in WSL2
 
 ### Verification Steps
 
@@ -84,17 +86,17 @@ Build complete ML applications in one environment:
 ```bash
 nvidia-smi
 ```
-Should show your RTX GPU with CUDA 12.8+
+Should show your RTX GPU with CUDA 13.2
 
 **Verify CUDA Toolkit:**
 ```bash
 nvcc --version
 ```
-Should display CUDA 12.8 or higher
+Should display CUDA 13.2 or higher
 
 **Test Docker GPU Access:**
 ```bash
-docker run --rm --gpus all nvcr.io/nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
+docker run --rm --gpus all nvcr.io/nvidia/cuda:13.2.0-base-ubuntu24.04 nvidia-smi
 ```
 
 ### Need Help Setting Up?
@@ -119,7 +121,7 @@ docker compose up -d
 ### 3. Access Jupyter Lab
 Open your browser at:
 ```
-http://127.0.0.1:8888/lab?token=
+http://127.0.0.1:8888/lab?token=rtx-5060_dev
 ```
 **Token:** `rtx-5060_dev`
 
@@ -128,15 +130,11 @@ http://127.0.0.1:8888/lab?token=
 Create a new notebook and run:
 ```python
 import torch
-import tensorflow as tf
 from llama_cpp import llama_cpp
 
 # PyTorch
 print(f"PyTorch CUDA Available: {torch.cuda.is_available()}")
 print(f"GPU Device: {torch.cuda.get_device_name(0)}")
-
-# TensorFlow
-print(f"TensorFlow GPUs: {tf.config.list_physical_devices('GPU')}")
 
 # llama-cpp-python
 print(f"llama-cpp GPU Support: {llama_cpp.llama_supports_gpu_offload()}")
@@ -146,7 +144,6 @@ Expected output:
 ```
 PyTorch CUDA Available: True
 GPU Device: NVIDIA GeForce RTX 5060
-TensorFlow GPUs: [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
 llama-cpp GPU Support: True
 ```
 
@@ -177,7 +174,7 @@ python3-workspace/
 
 | Section | Description |
 |---------|-------------|
-| **Base Image** | NVIDIA TensorFlow 25.02 with CUDA 12.8 |
+| **Base Image** | NVIDIA PyTorch 26.03 with CUDA 13.2 |
 | **System Deps** | Build tools, OpenGL, graphviz, Node.js |
 | **Python Link** | Ensures `python` command works |
 | **Node.js** | LTS via NodeSource with latest npm |
@@ -185,8 +182,8 @@ python3-workspace/
 | **Build Args** | `FORCE_CUBLAS=on` for Blackwell |
 | **Dependencies** | Python packages with NumPy 1.26.4 lock |
 | **llama-cpp** | Source build for sm_120 architecture |
-| **Runtime Opts** | Lazy loading, oneDNN disabled |
-| **Verification** | C-level CUDA support check |
+| **Runtime Opts** | Lazy loading, NVIDIA_DISABLE_REQUIRE |
+| **Verification** | PyTorch + llama-cpp CUDA support check |
 | **Ports** | 8888 (Jupyter), 5173 (Vite), 8000 (API) |
 
 ### docker-compose.yml Features
@@ -205,7 +202,7 @@ python3-workspace/
 - faiss-cpu (vector search)
 
 **Deep Learning:**
-- torch, torchvision, torchaudio
+- torch, torchvision, torchaudio — **pre-installed by the NGC base image; do not reinstall from PyPI**
 - accelerate, sentence-transformers
 
 **Computer Vision/Documents:**
@@ -214,15 +211,15 @@ python3-workspace/
 - beautifulsoup4
 
 **Backend/API:**
-- fastapi, uvicorn, pydantic-settings
+- fastapi, uvicorn[standard], pydantic-settings
 - python-multipart, websockets, watchfiles
 - python-dotenv
 
 **Utilities:**
 - cmake, pydot, markdown
-- hf-xet, httptools, tomli
+- hf-xet (fast large-file transfer from Hugging Face Hub)
 
-> **Note:** `llama-cpp-python` is compiled separately with custom CMAKE flags, not included in requirements.txt
+> **Note:** `llama-cpp-python` is compiled separately with custom CMAKE flags, not included in requirements.txt. `tomli` is not required — `tomllib` ships in the Python 3.12 standard library. `httptools` is covered by `uvicorn[standard]`.
 
 ---
 
@@ -558,10 +555,10 @@ torch.backends.cudnn.benchmark = True
 
 Already configured in `docker-compose.yml`:
 ```yaml
-CUDA_MODULE_LOADING=LAZY    # Optimized kernel loading for Blackwell ISA
-NVIDIA_DISABLE_REQUIRE=1    # Skips minor version checks for 12.8 -> 13.1 compatibility
-PYTORCH_ALLOC_CONF=expandable_segments:True    # Reduces VRAM fragmentation on 8 GB VRAM
-LLAMA_ARG_N_BATCH=512   # Prevents llama-cpp from trying to allocate massive batches on 8 GB VRAM
+CUDA_MODULE_LOADING=LAZY          # Defers kernel loading; reduces cold-start latency on Blackwell's new ISA
+NVIDIA_DISABLE_REQUIRE=1          # Skips minor-version checks between pip packages and CUDA 13.2 system libs
+PYTORCH_ALLOC_CONF=expandable_segments:True    # Reduces VRAM fragmentation on 8 GB cards
+LLAMA_ARG_BATCH=512               # Prevents llama-cpp from allocating massive batches on 8 GB VRAM
 ```
 
 ---
@@ -598,7 +595,7 @@ ports:
 ## Additional Resources
 
 ### Documentation
-- [NVIDIA TensorFlow Container](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/tensorflow)
+- [NVIDIA PyTorch Container](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch)
 - [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
 - [FastAPI](https://fastapi.tiangolo.com/)
 - [Vite](https://vitejs.dev/)
@@ -626,5 +623,5 @@ Having issues?
 | **RAM** | 16 GB | 32 GB |
 | **Storage** | 50 GB free | 100 GB+ SSD |
 | **Driver** | 570+ | Latest |
-| **CUDA** | 12.8 | 13.x |
+| **CUDA** | 13.2 | Latest |
 | **OS** | WSL2 Ubuntu 24.04 | Same |
