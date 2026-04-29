@@ -6,7 +6,7 @@ services:
     image: rtx-5060
     container_name: rtx-5060_dev
 
-    # GPU access — Blackwell (sm_120) requires driver 570+
+    # GPU access - NGC 26.03 (CUDA 13.2) requires driver 595+
     deploy:
       resources:
         reservations:
@@ -22,8 +22,8 @@ services:
       # --- Blackwell / CUDA ---
       - CUDA_MODULE_LOADING=LAZY        # Defers kernel loading; reduces cold-start
                                         # latency on Blackwell's new ISA
-      - NVIDIA_DISABLE_REQUIRE=1        # Skips minor-version checks between
-                                        # pip packages and CUDA 13.2 system libs
+      - NVIDIA_DISABLE_REQUIRE=1        # Bypasses NVIDIA container-runtime NVIDIA_REQUIRE_*
+                                        # driver/CUDA version gate (container-level check only)
 
       # --- PyTorch VRAM (8 GB RTX 5060) ---
       - PYTORCH_ALLOC_CONF=expandable_segments:True     # Reduces fragmentation;

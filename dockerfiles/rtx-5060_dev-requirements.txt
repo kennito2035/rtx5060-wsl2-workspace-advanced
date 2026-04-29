@@ -1,17 +1,18 @@
 ###############################################################################
-# rtx-5060_dev-requirements.txt
-# Updated: April 2026
-#
 # BASE IMAGE: nvcr.io/nvidia/pytorch:26.03-py3
 #
 # NOTE:
 # PyTorch stack is intentionally EXCLUDED from this file.
-# torch, torchvision, and torchaudio come pre-installed as NVIDIA-
-# optimized builds in the NGC PyTorch base image. Reinstalling them
-# from the standard PyPI index would silently replace those builds
-# with generic wheels and lose Blackwell-specific optimisations.
+# torch and torchvision come pre-installed as NVIDIA-optimized builds
+# in the NGC PyTorch base image. Reinstalling them from the standard
+# PyPI index would silently replace those builds with generic wheels
+# and lose Blackwell-specific optimizations.
 #
-# llama-cpp-python is also excluded — it is compiled from source
+# torchaudio is NOT included in any NGC PyTorch container; it is
+# compiled from source in Dockerfile Step 10 with sm_120 CUDA flags.
+# Do NOT add it here, see the inline note in the DEEP LEARNING section.
+#
+# llama-cpp-python is also excluded, it is compiled from source
 # directly in the Dockerfile with sm_120 / CUBLAS flags.
 ###############################################################################
 
@@ -26,7 +27,12 @@ faiss-cpu                  # Vector search (CPU build)
 
 ###############################################################################
 # DEEP LEARNING & LLMs
-# torch / torchvision / torchaudio -> PRE-INSTALLED in NGC base, do not add.
+# torch / torchvision -> PRE-INSTALLED in NGC base, do not add.
+# NOTE: torchaudio is NOT included in any NGC PyTorch container.
+#       It is compiled from source in the Dockerfile (Step 10) against
+#       the NGC torch build with TORCH_CUDA_ARCH_LIST=12.0 (Blackwell).
+#       Do NOT add it here, pip would pull a community wheel with a
+#       hard torch== pin that would replace the NVIDIA-optimized build.
 ###############################################################################
 accelerate                 # Hugging Face distributed training/inference
 sentence-transformers      # Embeddings (uses pre-installed torch)
@@ -37,7 +43,7 @@ transformers               # Explicit pin ensures consistent HF ecosystem
 ###############################################################################
 opencv-python
 pdf2image
-pypdf2
+pypdf                      # Successor to the deprecated PyPDF2 package
 pytesseract
 python-docx
 openpyxl
@@ -59,8 +65,9 @@ python-dotenv
 # UTILITIES & SYSTEM
 ###############################################################################
 cmake                      # Required for llama-cpp-python source build
-pydot                      # Model visualisation (requires graphviz system pkg)
+pydot                      # Model visualization (requires graphviz system pkg)
 markdown
 hf-xet                     # Fast large-file transfer from Hugging Face Hub
-# tomli removed — Python 3.12 ships tomllib in the standard library
-# httptools removed — covered by uvicorn[standard]
+ipywidgets                 # Interactive Jupyter widgets
+# tomli removed, Python 3.12 ships tomllib in the standard library
+# httptools removed, covered by uvicorn[standard]

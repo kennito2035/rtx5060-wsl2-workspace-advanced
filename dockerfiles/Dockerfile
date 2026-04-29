@@ -1,8 +1,8 @@
-############################################
+###############################################################################
 # 1.) Base: NVIDIA PyTorch 26.03 (CUDA 13.2, sm_120 native)
 #
 # Switched from nvcr.io/nvidia/tensorflow:25.02-tf2-py3.
-# Reason: unstable / incomplete RTX 50-series (sm_120)
+# Reason: Unstable / incomplete RTX 50-series (sm_120)
 # support observed in current TensorFlow releases.
 #
 # NVIDIA PyTorch 26.03 includes newer CUDA and
@@ -14,56 +14,57 @@
 # CUDA 13.2 and Blackwell support are still relatively
 # new across the ML ecosystem, so some third-party
 # libraries may still exhibit compatibility issues.
-############################################
+###############################################################################
 FROM nvcr.io/nvidia/pytorch:26.03-py3
 
-############################################
+###############################################################################
 # 2.) Working directory
-############################################
+###############################################################################
 WORKDIR /workspace
 
-############################################
+###############################################################################
 # 3.) System-level dependencies
-############################################
+###############################################################################
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential cmake git curl python3-dev python3-pip \
         graphviz libgl1 libglib2.0-0 \
         libgomp1 \
+        ffmpeg libsndfile1-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-############################################
+###############################################################################
 # 4.) Ensure python symlink exists (forced)
-############################################
+###############################################################################
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-############################################
+###############################################################################
 # 5.) Install Node.js
-############################################
+###############################################################################
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g npm@latest
 
-############################################
+###############################################################################
 # 6.) Build-time environment
-############################################
+###############################################################################
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}
 
-############################################
+###############################################################################
 # 7.) CUDA build policy toggle
 # Default ON for early Blackwell (sm_120).
 # Set to "off" later to test llama.cpp native kernels.
-############################################
+###############################################################################
 ARG FORCE_CUBLAS=on
 
-############################################
+###############################################################################
 # 8.) Copy requirements for caching
-############################################
+###############################################################################
 COPY dockerfiles/rtx-5060_dev-requirements.txt .
 
-############################################
+###############################################################################
 # 9.) Build python dependencies for sm_120
 #
 # NGC PyTorch 25.03+ ships /etc/pip/constraint.txt which is applied
@@ -88,7 +89,7 @@ COPY dockerfiles/rtx-5060_dev-requirements.txt .
 # pip is upgraded first alone. setuptools and wheel use --ignore-installed
 # because the NGC base installs them via Debian (no RECORD file), which
 # causes pip's uninstall step to fail and abort the entire RUN layer.
-############################################
+###############################################################################
 RUN python3 -m pip install --upgrade pip && \
     pip install --upgrade setuptools wheel --ignore-installed && \
     sed -i '/^numpy/d; /^ml-dtypes/d; /^packaging/d' /etc/pip/constraint.txt && \
@@ -122,21 +123,60 @@ RUN python3 -m pip install --upgrade pip && \
         "packaging<=25.0" \
         --force-reinstall
 
-############################################
-# 10.) Runtime optimization
-############################################
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+###############################################################################
+# 10.) Build torchaudio from source for sm_120
+#
+# torchaudio is not shipped in any NGC PyTorch container.
+# A plain `pip install torchaudio` pulls a community wheel
+# with a hard torch== pin that would silently replace the
+# NVIDIA-optimized torch build — the same risk the requirements
+# file warns about for torch/torchvision.
+#
+# We clone main (no stable tag exists for torch 2.11.0a0),
+# compile with CUDA targeting Blackwell (sm_120), and install
+# with --no-deps so the NGC torch is never touched.
+#
+# --no-build-isolation reuses the already-installed torch
+# headers rather than pulling a generic torch into an isolated
+# build env, which is essential for ABI compatibility.
+###############################################################################
+RUN git clone --depth 1 https://github.com/pytorch/audio.git /tmp/audio && \
+    cd /tmp/audio && \
+    USE_CUDA=1 \
+    USE_CUDNN=1 \
+    TORCH_CUDA_ARCH_LIST="12.0" \
+    python3 -m pip install \
+        --no-build-isolation \
+        --no-deps \
+        --no-cache-dir \
+        . && \
+    rm -rf /tmp/audio
+
+###############################################################################
+# 11.) Runtime optimization
+#
+# LD_LIBRARY_PATH is intentionally not re-declared here.
+# Step 6 already sets it to include both the CUDA lib64 path
+# and the stubs path (needed at build time for source compilations
+# in Steps 9 and 10). Re-expanding ${LD_LIBRARY_PATH} here would
+# only duplicate the prefix and leave stubs in place anyway, so
+# Step 6's value is the correct final state for this dev image.
+###############################################################################
 ENV CUDA_MODULE_LOADING=LAZY
 
-############################################
-# 11.) Verification (smoke test) — checks PyTorch GPU + llama-cpp GPU
-############################################
+###############################################################################
+# 12.) Verification (smoke test) — checks PyTorch GPU + llama-cpp GPU + torchaudio
+###############################################################################
 RUN echo "import torch; \
+import torchaudio; \
 import llama_cpp.llama_cpp as llm; \
 \
 cap = torch.cuda.get_device_capability(0); \
 print(f'Detected: {torch.cuda.get_device_name(0)} | sm_{cap[0]}{cap[1]}'); \
 assert cap[0] >= 12, 'Blackwell GPU not found'; \
+\
+backends = getattr(torchaudio, 'list_audio_backends', lambda: ['N/A (removed in torchaudio>=2.9)'])(); \
+print(f'torchaudio {torchaudio.__version__} | backends: {backends}'); \
 \
 print('Testing llama-cpp GPU backend...'); \
 has_gpu = llm.llama_supports_gpu_offload(); \
@@ -145,12 +185,12 @@ assert has_gpu, 'llama-cpp was built without CUDA support!'; \
 \
 print('Hardware verification passed!')" > /usr/local/bin/verify_gpu.py
 
-############################################
-# 12.) Ports exposed to the host
-############################################
+###############################################################################
+# 13.) Ports exposed to the host
+###############################################################################
 EXPOSE 8888 5173 8000
 
-############################################
-# 13.) Default entry
-############################################
+###############################################################################
+# 14.) Default entry
+###############################################################################
 CMD ["bash"]
